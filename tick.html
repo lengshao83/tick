@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>WebSocket量化选币系统</title>
+
+<style>
+body {
+    background:#0b0f14;
+    color:#e6edf3;
+    font-family:Arial;
+}
+
+h2 {
+    text-align:center;
+}
+
+table {
+    width:90%;
+    margin:20px auto;
+    border-collapse:collapse;
+}
+
+th,td {
+    padding:10px;
+    text-align:center;
+    border-bottom:1px solid #222;
+}
+
+th {
+    background:#111827;
+}
+
+.up { color:#00ff99; }
+.down { color:#ff4d4d; }
+
+.hot {
+    background:rgba(0,255,150,0.08);
+    box-shadow:0 0 10px rgba(0,255,150,0.2);
+}
+</style>
+</head>
+
+<body>
+
+<h2>🚀 WebSocket量化选币系统（tick级）</h2>
+
+<table>
+<thead>
+<tr>
+<th>币种</th>
+<th>价格</th>
+<th>2m</th>
+<th>3m</th>
+<th>动量</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody id="tbody"></tbody>
+</table>
+
+<script>
+
+// ===== 扫描币种 =====
+const symbols = [
+"btcusdt","ethusdt","solusdt","bnbusdt","xrpusdt",
+"dogeusdt","adausdt","linkusdt","ltcusdt"
+];
+
+// ===== tick数据存储 =====
+let history = {};
+let latest = {};
+
+symbols.forEach(s => history[s] = []);
+
+// ===== WebSocket（多币种trade流）=====
+let streams = symbols.map(s => s + "@trade").join("/");
+
+let ws = new WebSocket(
+"wss://stream.binance.com:9443/stream?streams=" + streams
+);
+
+// ===== 收数据 =====
+ws.onmessage = (event) => {
+    let msg = JSON.parse(event.data);
+    let d = msg.data;
+
+    let symbol = d.s.toLowerCase();
+    let price = parseFloat(d.p);
+    let now = Date.now();
+
+    history[symbol].push({ time: now, price });
+
+    // 只保留5分钟数据
+    history[symbol] = history[symbol].filter(
+        x => now - x.time <= 300000
+    );
+
+    let c2 = getChange(symbol, now, price, 120000);
+    let c3 = getChange(symbol, now, price, 180000);
+
+    latest[symbol] = {
+        price,
+        c2,
+        c3,
+        momentum: (c2||0) + (c3||0)
+    };
+
+    render();
+};
+
+// ===== 计算涨幅 =====
+function getChange(symbol, now, price, duration) {
+    let arr = history[symbol];
+
+    for (let i = arr.length - 1; i >= 0; i--) {
+        if (now - arr[i].time >= duration) {
+            return ((price - arr[i].price) / arr[i].price) * 100;
+        }
+    }
+    return null;
+}
+
+// ===== 选币策略 =====
+function isHot(d) {
+    if (!d.c2 || !d.c3) return false;
+
+    return (
+        d.c2 > 0.4 &&
+        d.c3 > 0.8 &&
+        d.c3 > d.c2
+    );
+}
+
+// ===== 渲染 =====
+function render() {
+    let tbody = document.getElementById("tbody");
+
+    let list = Object.entries(latest)
+        .map(([symbol,d]) => ({
+            symbol,
+            ...d
+        }))
+        .sort((a,b)=>(b.momentum||0)-(a.momentum||0));
+
+    tbody.innerHTML = "";
+
+    list.forEach(item => {
+
+        let tr = document.createElement("tr");
+
+        if (isHot(item)) tr.classList.add("hot");
+
+        tr.innerHTML = `
+            <td>${item.symbol.toUpperCase()}</td>
+            <td>${item.price.toFixed(4)}</td>
+            <td class="${item.c2>=0?'up':'down'}">
+                ${item.c2 ? item.c2.toFixed(2) : "--"}%
+            </td>
+            <td class="${item.c3>=0?'up':'down'}">
+                ${item.c3 ? item.c3.toFixed(2) : "--"}%
+            </td>
+            <td>${(item.momentum||0).toFixed(2)}</td>
+            <td>${isHot(item) ? "🔥 强势动量" : "-"}</td>
+        `;
+
+        tbody.appendChild(tr);
+    });
+}
+
+// ===== 断线重连 =====
+ws.onclose = () => {
+    setTimeout(() => location.reload(), 2000);
+};
+
+</script>
+
+</body>
+</html>
